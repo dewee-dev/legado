@@ -9,7 +9,6 @@ import androidx.annotation.CheckResult
 import androidx.annotation.ColorInt
 import androidx.annotation.ColorRes
 import androidx.core.content.ContextCompat
-import io.legado.app.R
 import io.legado.app.utils.ColorUtils
 import splitties.init.appCtx
 
@@ -164,7 +163,22 @@ private constructor(private val mContext: Context) : ThemeStoreInterface {
             .apply()
     }
 
-    companion object {
+    companion object : SharedPreferences.OnSharedPreferenceChangeListener {
+
+        init {
+            prefs(appCtx).registerOnSharedPreferenceChangeListener(this)
+        }
+
+        var accentColor = accentColor()
+
+        override fun onSharedPreferenceChanged(
+            sharedPreferences: SharedPreferences?,
+            key: String?
+        ) {
+            when (key) {
+                ThemeStorePrefKeys.KEY_ACCENT_COLOR -> accentColor = accentColor()
+            }
+        }
 
         fun editTheme(context: Context): ThemeStore {
             return ThemeStore(context)
@@ -189,7 +203,11 @@ private constructor(private val mContext: Context) : ThemeStoreInterface {
         fun primaryColor(context: Context = appCtx): Int {
             return prefs(context).getInt(
                 ThemeStorePrefKeys.KEY_PRIMARY_COLOR,
-                ThemeUtils.resolveColor(context, R.attr.colorPrimary, Color.parseColor("#455A64"))
+                ThemeUtils.resolveColor(
+                    context,
+                    androidx.appcompat.R.attr.colorPrimary,
+                    Color.parseColor("#455A64")
+                )
             )
         }
 
@@ -200,7 +218,7 @@ private constructor(private val mContext: Context) : ThemeStoreInterface {
                 ThemeStorePrefKeys.KEY_PRIMARY_COLOR_DARK,
                 ThemeUtils.resolveColor(
                     context,
-                    R.attr.colorPrimaryDark,
+                    androidx.appcompat.R.attr.colorPrimaryDark,
                     Color.parseColor("#37474F")
                 )
             )
@@ -211,7 +229,11 @@ private constructor(private val mContext: Context) : ThemeStoreInterface {
         fun accentColor(context: Context = appCtx): Int {
             return prefs(context).getInt(
                 ThemeStorePrefKeys.KEY_ACCENT_COLOR,
-                ThemeUtils.resolveColor(context, R.attr.colorAccent, Color.parseColor("#263238"))
+                ThemeUtils.resolveColor(
+                    context,
+                    androidx.appcompat.R.attr.colorAccent,
+                    Color.parseColor("#263238")
+                )
             )
         }
 

@@ -1,5 +1,6 @@
 package io.legado.app.base
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.drawable.BitmapDrawable
@@ -10,6 +11,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.FrameLayout
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.viewbinding.ViewBinding
 import io.legado.app.R
@@ -23,9 +25,6 @@ import io.legado.app.lib.theme.backgroundColor
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.ui.widget.TitleBar
 import io.legado.app.utils.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.cancel
 
 
 abstract class BaseActivity<VB : ViewBinding>(
@@ -34,11 +33,12 @@ abstract class BaseActivity<VB : ViewBinding>(
     private val toolBarTheme: Theme = Theme.Auto,
     private val transparent: Boolean = false,
     private val imageBg: Boolean = true
-) : AppCompatActivity(), CoroutineScope by MainScope() {
+) : AppCompatActivity() {
 
     protected abstract val binding: VB
 
     val isInMultiWindow: Boolean
+        @SuppressLint("ObsoleteSdkInt")
         get() {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 isInMultiWindowMode
@@ -63,6 +63,7 @@ abstract class BaseActivity<VB : ViewBinding>(
         return super.onCreateView(parent, name, context, attrs)
     }
 
+    @SuppressLint("ObsoleteSdkInt")
     override fun onCreate(savedInstanceState: Bundle?) {
         window.decorView.disableAutoFill()
         initTheme()
@@ -74,11 +75,12 @@ abstract class BaseActivity<VB : ViewBinding>(
             findViewById<TitleBar>(R.id.title_bar)
                 ?.onMultiWindowModeChanged(isInMultiWindowMode, fullScreen)
         }
-        onActivityCreated(savedInstanceState)
         observeLiveBus()
+        onActivityCreated(savedInstanceState)
     }
 
-    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration?) {
+    @RequiresApi(Build.VERSION_CODES.O)
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
         super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
         findViewById<TitleBar>(R.id.title_bar)
             ?.onMultiWindowModeChanged(isInMultiWindowMode, fullScreen)
@@ -90,11 +92,6 @@ abstract class BaseActivity<VB : ViewBinding>(
         findViewById<TitleBar>(R.id.title_bar)
             ?.onMultiWindowModeChanged(isInMultiWindow, fullScreen)
         setupSystemBar()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        cancel()
     }
 
     abstract fun onActivityCreated(savedInstanceState: Bundle?)

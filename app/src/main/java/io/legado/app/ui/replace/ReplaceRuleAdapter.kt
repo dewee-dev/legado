@@ -25,15 +25,11 @@ class ReplaceRuleAdapter(context: Context, var callBack: CallBack) :
 
     private val selected = linkedSetOf<ReplaceRule>()
 
-    val selection: LinkedHashSet<ReplaceRule>
+    val selection: List<ReplaceRule>
         get() {
-            val selection = linkedSetOf<ReplaceRule>()
-            getItems().map {
-                if (selected.contains(it)) {
-                    selection.add(it)
-                }
+            return getItems().filter {
+                selected.contains(it)
             }
-            return selection
         }
 
     val diffItemCallBack = object : DiffUtil.ItemCallback<ReplaceRule>() {
@@ -164,7 +160,10 @@ class ReplaceRuleAdapter(context: Context, var callBack: CallBack) :
             when (menuItem.itemId) {
                 R.id.menu_top -> callBack.toTop(item)
                 R.id.menu_bottom -> callBack.toBottom(item)
-                R.id.menu_del -> callBack.delete(item)
+                R.id.menu_del -> {
+                    callBack.delete(item)
+                    selected.remove(item)
+                }
             }
             true
         }

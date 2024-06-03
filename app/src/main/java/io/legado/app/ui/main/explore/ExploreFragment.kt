@@ -8,34 +8,54 @@ import android.view.View
 import androidx.appcompat.widget.SearchView
 import androidx.core.view.isGone
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import io.legado.app.R
 import io.legado.app.base.VMBaseFragment
 import io.legado.app.constant.AppLog
-import io.legado.app.constant.AppPattern
 import io.legado.app.data.appDb
-import io.legado.app.data.entities.BookSource
+import io.legado.app.data.entities.BookSourcePart
 import io.legado.app.databinding.FragmentExploreBinding
 import io.legado.app.help.config.AppConfig
+import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.lib.theme.primaryTextColor
 import io.legado.app.ui.book.explore.ExploreShowActivity
+import io.legado.app.ui.book.search.SearchActivity
+import io.legado.app.ui.book.search.SearchScope
 import io.legado.app.ui.book.source.edit.BookSourceEditActivity
-import io.legado.app.utils.*
+import io.legado.app.ui.main.MainFragmentInterface
+import io.legado.app.utils.applyTint
+import io.legado.app.utils.cnCompare
+import io.legado.app.utils.setEdgeEffectColor
+import io.legado.app.utils.startActivity
 import io.legado.app.utils.viewbindingdelegate.viewBinding
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 
 /**
  * 发现界面
  */
-class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explore),
+class ExploreFragment() : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explore),
+    MainFragmentInterface,
     ExploreAdapter.CallBack {
+
+    constructor(position: Int) : this() {
+        val bundle = Bundle()
+        bundle.putInt("position", position)
+        arguments = bundle
+    }
+
+    override val position: Int? get() = arguments?.getInt("position")
 
     override val viewModel by viewModels<ExploreViewModel>()
     private val binding by viewBinding(FragmentExploreBinding::bind)
@@ -74,7 +94,9 @@ class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explo
         searchView.onActionViewExpanded()
         searchView.isSubmitButtonEnabled = true
         searchView.queryHint = getString(R.string.screen_find)
-        searchView.clearFocus()
+        searchView.post {
+            searchView.clearFocus()
+        }
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean {
                 return false
@@ -103,12 +125,10 @@ class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explo
     }
 
     private fun initGroupData() {
-        launch {
-            appDb.bookSourceDao.flowExploreGroup().conflate().collect {
+        viewLifecycleOwner.lifecycleScope.launch {
+            appDb.bookSourceDao.flowExploreGroups().conflate().collect {
                 groups.clear()
-                it.map { group ->
-                    groups.addAll(group.splitNotBlank(AppPattern.splitGroupRegex))
-                }
+                groups.addAll(it)
                 upGroupsMenu()
             }
         }
@@ -116,23 +136,26 @@ class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explo
 
     private fun upExploreData(searchKey: String? = null) {
         exploreFlowJob?.cancel()
-        exploreFlowJob = launch {
+        exploreFlowJob = viewLifecycleOwner.lifecycleScope.launch {
             when {
                 searchKey.isNullOrBlank() -> {
                     appDb.bookSourceDao.flowExplore()
                 }
+
                 searchKey.startsWith("group:") -> {
                     val key = searchKey.substringAfter("group:")
-                    appDb.bookSourceDao.flowGroupExplore("%$key%")
+                    appDb.bookSourceDao.flowGroupExplore(key)
                 }
+
                 else -> {
-                    appDb.bookSourceDao.flowExplore("%$searchKey%")
+                    appDb.bookSourceDao.flowExplore(searchKey)
                 }
-            }.catch {
+            }.flowWithLifecycle(viewLifecycleOwner.lifecycle, Lifecycle.State.RESUMED).catch {
                 AppLog.put("发现界面更新数据出错", it)
-            }.conflate().collect {
+            }.conflate().flowOn(IO).collect {
                 binding.tvEmptyMsg.isGone = it.isNotEmpty() || searchView.query.isNotEmpty()
                 adapter.setItems(it, diffItemCallBack)
+                delay(500)
             }
         }
     }
@@ -147,17 +170,13 @@ class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explo
     }
 
     override val scope: CoroutineScope
-        get() = lifecycleScope
+        get() = viewLifecycleOwner.lifecycleScope
 
     override fun onCompatOptionsItemSelected(item: MenuItem) {
         super.onCompatOptionsItemSelected(item)
         if (item.groupId == R.id.menu_group_text) {
             searchView.setQuery("group:${item.title}", true)
         }
-    }
-
-    override fun refreshData() {
-        upExploreData(searchView.query?.toString())
     }
 
     override fun scrollTo(pos: Int) {
@@ -179,8 +198,24 @@ class ExploreFragment : VMBaseFragment<ExploreViewModel>(R.layout.fragment_explo
         }
     }
 
-    override fun toTop(source: BookSource) {
+    override fun toTop(source: BookSourcePart) {
         viewModel.topSource(source)
+    }
+
+    override fun deleteSource(source: BookSourcePart) {
+        alert(R.string.draw) {
+            setMessage(getString(R.string.sure_del) + "\n" + source.bookSourceName)
+            noButton()
+            yesButton {
+                viewModel.deleteSource(source)
+            }
+        }
+    }
+
+    override fun searchBook(bookSource: BookSourcePart) {
+        startActivity<SearchActivity> {
+            putExtra("searchScope", SearchScope(bookSource).toString())
+        }
     }
 
     fun compressExplore() {

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import androidx.annotation.Keep
 import com.bumptech.glide.RequestBuilder
 import com.bumptech.glide.load.resource.bitmap.CenterCrop
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
@@ -23,6 +24,7 @@ import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.utils.*
 import splitties.init.appCtx
 
+@Keep
 object BookCover {
 
     private const val coverRuleConfigKey = "legadoCoverRuleConfig"
@@ -32,9 +34,7 @@ object BookCover {
         private set
     lateinit var defaultDrawable: Drawable
         private set
-    var coverRuleConfig: CoverRuleConfig =
-        GSON.fromJsonObject<CoverRuleConfig>(CacheManager.get(coverRuleConfigKey)).getOrNull()
-            ?: DefaultData.coverRuleConfig
+
 
     init {
         upDefaultCover()
@@ -70,13 +70,17 @@ object BookCover {
     fun load(
         context: Context,
         path: String?,
-        loadOnlyWifi: Boolean = false
+        loadOnlyWifi: Boolean = false,
+        sourceOrigin: String? = null
     ): RequestBuilder<Drawable> {
         if (AppConfig.useDefaultCover) {
             return ImageLoader.load(context, defaultDrawable)
                 .centerCrop()
         }
-        val options = RequestOptions().set(OkHttpModelLoader.loadOnlyWifiOption, loadOnlyWifi)
+        var options = RequestOptions().set(OkHttpModelLoader.loadOnlyWifiOption, loadOnlyWifi)
+        if (sourceOrigin != null) {
+            options = options.set(OkHttpModelLoader.sourceOriginOption, sourceOrigin)
+        }
         return ImageLoader.load(context, path)
             .apply(options)
             .placeholder(defaultDrawable)
@@ -90,14 +94,18 @@ object BookCover {
     fun loadBlur(
         context: Context,
         path: String?,
-        loadOnlyWifi: Boolean = false
+        loadOnlyWifi: Boolean = false,
+        sourceOrigin: String? = null
     ): RequestBuilder<Drawable> {
         val loadBlur = ImageLoader.load(context, defaultDrawable)
             .transform(BlurTransformation(25), CenterCrop())
         if (AppConfig.useDefaultCover) {
             return loadBlur
         }
-        val options = RequestOptions().set(OkHttpModelLoader.loadOnlyWifiOption, loadOnlyWifi)
+        var options = RequestOptions().set(OkHttpModelLoader.loadOnlyWifiOption, loadOnlyWifi)
+        if (sourceOrigin != null) {
+            options = options.set(OkHttpModelLoader.sourceOriginOption, sourceOrigin)
+        }
         return ImageLoader.load(context, path)
             .apply(options)
             .transform(BlurTransformation(25), CenterCrop())
@@ -105,8 +113,14 @@ object BookCover {
             .thumbnail(loadBlur)
     }
 
+    fun getCoverRule(): CoverRule {
+        return GSON.fromJsonObject<CoverRule>(CacheManager.get(coverRuleConfigKey))
+            .getOrNull()
+            ?: DefaultData.coverRule
+    }
+
     suspend fun searchCover(book: Book): String? {
-        val config = coverRuleConfig
+        val config = getCoverRule()
         if (!config.enable || config.searchUrl.isBlank() || config.coverRule.isBlank()) {
             return null
         }
@@ -123,18 +137,17 @@ object BookCover {
         return analyzeRule.getString(config.coverRule, isUrl = true)
     }
 
-    fun saveCoverRuleConfig(config: CoverRuleConfig) {
-        coverRuleConfig = config
+    fun saveCoverRule(config: CoverRule) {
         val json = GSON.toJson(config)
         CacheManager.put(coverRuleConfigKey, json)
     }
 
-    fun delCoverRuleConfig() {
+    fun delCoverRule() {
         CacheManager.delete(coverRuleConfigKey)
-        coverRuleConfig = DefaultData.coverRuleConfig
     }
 
-    data class CoverRuleConfig(
+    @Keep
+    data class CoverRule(
         var enable: Boolean = true,
         var searchUrl: String,
         var coverRule: String,
@@ -142,6 +155,8 @@ object BookCover {
         override var loginUrl: String? = null,
         override var loginUi: String? = null,
         override var header: String? = null,
+        override var jsLib: String? = null,
+        override var enabledCookieJar: Boolean? = false,
     ) : BaseSource {
 
         override fun getTag(): String {

@@ -3,13 +3,12 @@ package io.legado.app.constant
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.provider.Settings
+import androidx.annotation.Keep
 import io.legado.app.BuildConfig
-import io.legado.app.R
 import splitties.init.appCtx
 import java.text.SimpleDateFormat
-import javax.script.ScriptEngine
-import javax.script.ScriptEngineManager
 
+@Suppress("ConstPropertyName")
 @SuppressLint("SimpleDateFormat")
 object AppConst {
 
@@ -23,9 +22,7 @@ object AppConst {
 
     const val MAX_THREAD = 9
 
-    val SCRIPT_ENGINE: ScriptEngine by lazy {
-        ScriptEngineManager().getEngineByName("rhino")
-    }
+    const val DEFAULT_WEBDAV_ID = -1L
 
     val timeFormat: SimpleDateFormat by lazy {
         SimpleDateFormat("HH:mm")
@@ -39,17 +36,7 @@ object AppConst {
         SimpleDateFormat("yy-MM-dd-HH-mm-ss")
     }
 
-    const val bookGroupAllId = -1L
-    const val bookGroupLocalId = -2L
-    const val bookGroupAudioId = -3L
-    const val bookGroupNoneId = -4L
-
-    const val notificationIdRead = -1122391
-    const val notificationIdAudio = -1122392
-    const val notificationIdCache = -1122393
-    const val notificationIdWeb = -1122394
-    const val notificationIdDownload = -1122395
-    const val notificationIdCheckSource = -1122395
+    const val imagePathKey = "imagePath"
 
     val menuViewNames = arrayOf(
         "com.android.internal.view.menu.ListMenuItemView",
@@ -57,14 +44,17 @@ object AppConst {
     )
 
     @SuppressLint("PrivateResource")
-    val sysElevation = appCtx.resources.getDimension(R.dimen.design_appbar_elevation).toInt()
+    val sysElevation = appCtx.resources
+        .getDimension(com.google.android.material.R.dimen.design_appbar_elevation)
+        .toInt()
 
     val androidId: String by lazy {
-        Settings.System.getString(appCtx.contentResolver, Settings.Secure.ANDROID_ID)
+        Settings.System.getString(appCtx.contentResolver, Settings.Secure.ANDROID_ID) ?: "null"
     }
 
     val appInfo: AppInfo by lazy {
         val appInfo = AppInfo()
+        @Suppress("DEPRECATION")
         appCtx.packageManager.getPackageInfo(appCtx.packageName, PackageManager.GET_ACTIVITIES)
             ?.let {
                 appInfo.versionName = it.versionName
@@ -81,6 +71,7 @@ object AppConst {
     val charsets =
         arrayListOf("UTF-8", "GB2312", "GB18030", "GBK", "Unicode", "UTF-16", "UTF-16LE", "ASCII")
 
+    @Keep
     data class AppInfo(
         var versionCode: Long = 0L,
         var versionName: String = ""

@@ -1,14 +1,18 @@
 package io.legado.app.model
 
 import android.annotation.SuppressLint
+import android.util.Log
+import io.legado.app.BuildConfig
 import io.legado.app.constant.AppPattern
 import io.legado.app.data.entities.*
+import io.legado.app.help.book.isWebFile
 import io.legado.app.help.coroutine.CompositeCoroutine
+import io.legado.app.help.source.sortUrls
 import io.legado.app.model.rss.Rss
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.HtmlFormatter
 import io.legado.app.utils.isAbsUrl
-import io.legado.app.utils.msg
+import io.legado.app.utils.stackTraceStr
 import kotlinx.coroutines.CoroutineScope
 import java.text.SimpleDateFormat
 import java.util.*
@@ -28,16 +32,19 @@ object Debug {
     @Synchronized
     fun log(
         sourceUrl: String?,
-        msg: String? = "",
+        msg: String = "",
         print: Boolean = true,
         isHtml: Boolean = false,
         showTime: Boolean = true,
         state: Int = 1
     ) {
+        if (BuildConfig.DEBUG) {
+            Log.d("sourceDebug", msg)
+        }
         //调试信息始终要执行
         callback?.let {
             if ((debugSource != sourceUrl || !print)) return
-            var printMsg = msg ?: ""
+            var printMsg = msg
             if (isHtml) {
                 printMsg = HtmlFormatter.format(msg)
             }
@@ -47,15 +54,15 @@ object Debug {
             }
             it.printLog(state, printMsg)
         }
-        if (isChecking && sourceUrl != null && (msg ?: "").length < 30) {
-            var printMsg = msg ?: ""
+        if (isChecking && sourceUrl != null && (msg).length < 30) {
+            var printMsg = msg
             if (isHtml) {
                 printMsg = HtmlFormatter.format(msg)
             }
             if (showTime && debugTimeMap[sourceUrl] != null) {
                 val time =
                     debugTimeFormat.format(Date(System.currentTimeMillis() - debugTimeMap[sourceUrl]!!))
-                printMsg = printMsg.replace(AppPattern.debugMessageSymbolRegex,"")
+                printMsg = printMsg.replace(AppPattern.debugMessageSymbolRegex, "")
 
                 debugMessageMap[sourceUrl] = "$time $printMsg"
             }
@@ -64,7 +71,7 @@ object Debug {
 
     @Synchronized
     fun log(msg: String?) {
-        log(debugSource, msg, true)
+        log(debugSource, msg ?: "", true)
     }
 
     fun cancelDebug(destroy: Boolean = false) {
@@ -93,13 +100,14 @@ object Debug {
     fun updateFinalMessage(sourceUrl: String, state: String) {
         if (debugTimeMap[sourceUrl] != null && debugMessageMap[sourceUrl] != null) {
             val spendingTime = System.currentTimeMillis() - debugTimeMap[sourceUrl]!!
-            debugTimeMap[sourceUrl] = if (state == "校验成功") spendingTime else CheckSource.timeout + spendingTime
+            debugTimeMap[sourceUrl] =
+                if (state == "校验成功") spendingTime else CheckSource.timeout + spendingTime
             val printTime = debugTimeFormat.format(Date(spendingTime))
             debugMessageMap[sourceUrl] = "$printTime $state"
         }
     }
 
-    fun startDebug(scope: CoroutineScope, rssSource: RssSource) {
+    suspend fun startDebug(scope: CoroutineScope, rssSource: RssSource) {
         cancelDebug()
         debugSource = rssSource.sourceUrl
         log(debugSource, "︾开始解析")
@@ -126,7 +134,7 @@ object Debug {
                 }
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
     }
 
@@ -143,7 +151,7 @@ object Debug {
                 log(debugSource, "︽内容页解析完成", state = 1000)
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
     }
 
@@ -159,11 +167,13 @@ object Debug {
                 log(bookSource.bookSourceUrl, "⇒开始访问详情页:$key")
                 infoDebug(scope, bookSource, book)
             }
+
             key.contains("::") -> {
                 val url = key.substringAfter("::")
                 log(bookSource.bookSourceUrl, "⇒开始访问发现页:$url")
                 exploreDebug(scope, bookSource, url)
             }
+
             key.startsWith("++") -> {
                 val url = key.substring(2)
                 val book = Book()
@@ -172,6 +182,7 @@ object Debug {
                 log(bookSource.bookSourceUrl, "⇒开始访目录页:$url")
                 tocDebug(scope, bookSource, book)
             }
+
             key.startsWith("--") -> {
                 val url = key.substring(2)
                 val book = Book()
@@ -182,6 +193,7 @@ object Debug {
                 chapter.url = url
                 contentDebug(scope, bookSource, book, chapter, null)
             }
+
             else -> {
                 log(bookSource.bookSourceUrl, "⇒开始搜索关键字:$key")
                 searchDebug(scope, bookSource, key)
@@ -202,7 +214,7 @@ object Debug {
                 }
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
         tasks.add(explore)
     }
@@ -220,7 +232,7 @@ object Debug {
                 }
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
         tasks.add(search)
     }
@@ -237,10 +249,14 @@ object Debug {
             .onSuccess {
                 log(debugSource, "︽详情页解析完成")
                 log(debugSource, showTime = false)
-                tocDebug(scope, bookSource, book)
+                if (!book.isWebFile) {
+                    tocDebug(scope, bookSource, book)
+                } else {
+                    log(debugSource, "≡文件类书源跳过解析目录", state = 1000)
+                }
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
         tasks.add(info)
     }
@@ -248,14 +264,19 @@ object Debug {
     private fun tocDebug(scope: CoroutineScope, bookSource: BookSource, book: Book) {
         log(debugSource, "︾开始解析目录页")
         val chapterList = WebBook.getChapterList(scope, bookSource, book)
-            .onSuccess {
+            .onSuccess { chapters ->
                 log(debugSource, "︽目录页解析完成")
                 log(debugSource, showTime = false)
-                val nextChapterUrl = it.getOrNull(1)?.url ?: it.first().url
-                contentDebug(scope, bookSource, book, it.first(), nextChapterUrl)
+                val toc = chapters.filter { !(it.isVolume && it.url.startsWith(it.title)) }
+                if (toc.isEmpty()) {
+                    log(debugSource, "≡没有正文章节")
+                    return@onSuccess
+                }
+                val nextChapterUrl = toc.getOrNull(1)?.url ?: toc.first().url
+                contentDebug(scope, bookSource, book, toc.first(), nextChapterUrl)
             }
             .onError {
-                log(debugSource, it.msg, state = -1)
+                log(debugSource, it.stackTraceStr, state = -1)
             }
         tasks.add(chapterList)
     }
@@ -278,7 +299,7 @@ object Debug {
         ).onSuccess {
             log(debugSource, "︽正文页解析完成", state = 1000)
         }.onError {
-            log(debugSource, it.msg, state = -1)
+            log(debugSource, it.stackTraceStr, state = -1)
         }
         tasks.add(content)
     }

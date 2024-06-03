@@ -5,13 +5,11 @@ import io.legado.app.data.entities.BookChapter
 import io.legado.app.utils.*
 import me.ag2s.umdlib.domain.UmdBook
 import me.ag2s.umdlib.umd.UmdReader
-import splitties.init.appCtx
-
 import java.io.File
 import java.io.InputStream
 
 class UmdFile(var book: Book) {
-    companion object {
+    companion object : BaseLocalBookParse {
         private var uFile: UmdFile? = null
 
         @Synchronized
@@ -25,17 +23,17 @@ class UmdFile(var book: Book) {
         }
 
         @Synchronized
-        fun getChapterList(book: Book): ArrayList<BookChapter> {
+        override fun getChapterList(book: Book): ArrayList<BookChapter> {
             return getUFile(book).getChapterList()
         }
 
         @Synchronized
-        fun getContent(book: Book, chapter: BookChapter): String? {
+        override fun getContent(book: Book, chapter: BookChapter): String? {
             return getUFile(book).getContent(chapter)
         }
 
         @Synchronized
-        fun getImage(
+        override fun getImage(
             book: Book,
             href: String
         ): InputStream? {
@@ -44,7 +42,7 @@ class UmdFile(var book: Book) {
 
 
         @Synchronized
-        fun upBookInfo(book: Book) {
+        override fun upBookInfo(book: Book) {
             return getUFile(book).upBookInfo()
         }
     }
@@ -64,11 +62,7 @@ class UmdFile(var book: Book) {
         try {
             umdBook?.let {
                 if (book.coverUrl.isNullOrEmpty()) {
-                    book.coverUrl = FileUtils.getPath(
-                        appCtx.externalFiles,
-                        "covers",
-                        "${MD5Utils.md5Encode16(book.bookUrl)}.jpg"
-                    )
+                    book.coverUrl = LocalBook.getCoverPath(book)
                 }
                 if (!File(book.coverUrl!!).exists()) {
                     FileUtils.writeBytes(book.coverUrl!!, it.cover.coverData)
@@ -112,8 +106,6 @@ class UmdFile(var book: Book) {
             DebugLog.d(javaClass.name, chapter.url)
             chapterList.add(chapter)
         }
-        book.latestChapterTitle = chapterList.lastOrNull()?.title
-        book.totalChapterNum = chapterList.size
         return chapterList
     }
 

@@ -1,6 +1,8 @@
 package io.legado.app.utils
 
-val Throwable.msg: String
+import java.io.IOException
+
+val Throwable.stackTraceStr: String
     get() {
         val stackTrace = stackTraceToString()
         val lMsg = this.localizedMessage ?: "noErrorMsg"
@@ -9,3 +11,9 @@ val Throwable.msg: String
             else -> lMsg
         }
     }
+
+fun Throwable.asIOException(): IOException {
+    val newException = IOException(this.message)
+    newException.initCause(this)
+    return newException
+}

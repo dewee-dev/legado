@@ -10,13 +10,15 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
-import io.legado.app.help.ContentProcessor
+import io.legado.app.help.book.ContentProcessor
+import io.legado.app.help.book.getBookSource
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.service.AudioPlayService
 import io.legado.app.utils.postEvent
 import io.legado.app.utils.startService
 import splitties.init.appCtx
 
+@Suppress("unused")
 object AudioPlay {
     var titleData = MutableLiveData<String>()
     var coverData = MutableLiveData<String>()
@@ -26,9 +28,25 @@ object AudioPlay {
     var inBookshelf = false
     var bookSource: BookSource? = null
     val loadingChapters = arrayListOf<Int>()
+    var durChapterIndex = 0
 
-    fun headers(hasLoginHeader: Boolean): Map<String, String>? {
-        return bookSource?.getHeaderMap(hasLoginHeader)
+    fun upData(context: Context, book: Book) {
+        AudioPlay.book = book
+        upDurChapter(book)
+        if (durChapterIndex != book.durChapterIndex) {
+            durChapterIndex = book.durChapterIndex
+            playNew(context)
+        }
+    }
+
+    fun resetData(context: Context, book: Book) {
+        stop(context)
+        AudioPlay.book = book
+        titleData.postValue(book.name)
+        coverData.postValue(book.getDisplayCover())
+        bookSource = book.getBookSource()
+        durChapterIndex = book.durChapterIndex
+        upDurChapter(book)
     }
 
     /**
@@ -42,6 +60,22 @@ object AudioPlay {
             durChapter?.let {
                 context.startService<AudioPlayService> {
                     action = IntentAction.play
+                }
+            }
+        }
+    }
+
+    /**
+     * 从头播放新章节
+     */
+    fun playNew(context: Context) {
+        book?.let {
+            if (durChapter == null) {
+                upDurChapter(it)
+            }
+            durChapter?.let {
+                context.startService<AudioPlayService> {
+                    action = IntentAction.playNew
                 }
             }
         }
@@ -104,9 +138,10 @@ object AudioPlay {
             book?.let { book ->
                 book.durChapterIndex = index
                 book.durChapterPos = 0
+                durChapterIndex = book.durChapterIndex
                 durChapter = null
-                saveRead(book)
-                play(context)
+                saveRead()
+                playNew(context)
             }
         }
     }
@@ -114,28 +149,44 @@ object AudioPlay {
     fun prev(context: Context) {
         Coroutine.async {
             book?.let { book ->
-                if (book.durChapterIndex <= 0) {
-                    return@let
+                if (book.durChapterIndex > 0) {
+                    book.durChapterIndex -= 1
+                    book.durChapterPos = 0
+                    durChapterIndex = book.durChapterIndex
+                    durChapter = null
+                    saveRead()
+                    play(context)
+                } else {
+                    stop(context)
                 }
-                book.durChapterIndex = book.durChapterIndex - 1
-                book.durChapterPos = 0
-                durChapter = null
-                saveRead(book)
-                play(context)
             }
         }
     }
 
     fun next(context: Context) {
         book?.let { book ->
-            if (book.durChapterIndex >= book.totalChapterNum) {
-                return@let
+            if (book.durChapterIndex + 1 < book.totalChapterNum) {
+                book.durChapterIndex += 1
+                book.durChapterPos = 0
+                durChapterIndex = book.durChapterIndex
+                durChapter = null
+                saveRead()
+                play(context)
+            } else {
+                stop(context)
             }
-            book.durChapterIndex = book.durChapterIndex + 1
-            book.durChapterPos = 0
-            durChapter = null
-            saveRead(book)
-            play(context)
+        }
+    }
+
+    fun setTimer(minute: Int) {
+        if (AudioPlayService.isRun) {
+            val intent = Intent(appCtx, AudioPlayService::class.java)
+            intent.action = IntentAction.setTimer
+            intent.putExtra("minute", minute)
+            appCtx.startService(intent)
+        } else {
+            AudioPlayService.timeMinute = minute
+            postEvent(EventBus.AUDIO_DS, minute)
         }
     }
 
@@ -145,23 +196,19 @@ object AudioPlay {
         appCtx.startService(intent)
     }
 
-    fun setTimer(minute: Int) {
-        val intent = Intent(appCtx, AudioPlayService::class.java)
-        intent.action = IntentAction.setTimer
-        intent.putExtra("minute", minute)
-        appCtx.startService(intent)
-    }
-
-    fun saveRead(book: Book) {
-        book.lastCheckCount = 0
-        book.durChapterTime = System.currentTimeMillis()
-        Coroutine.async {
-            appDb.bookChapterDao.getChapter(book.bookUrl, book.durChapterIndex)?.let {
-                book.durChapterTitle = it.getDisplayTitle(
-                    ContentProcessor.get(book.name, book.origin).getTitleReplaceRules()
-                )
+    fun saveRead() {
+        book?.let { book ->
+            book.lastCheckCount = 0
+            book.durChapterTime = System.currentTimeMillis()
+            Coroutine.async {
+                appDb.bookChapterDao.getChapter(book.bookUrl, book.durChapterIndex)?.let {
+                    book.durChapterTitle = it.getDisplayTitle(
+                        ContentProcessor.get(book.name, book.origin).getTitleReplaceRules(),
+                        book.getUseReplaceRule()
+                    )
+                }
+                book.update()
             }
-            book.save()
         }
     }
 
@@ -172,7 +219,7 @@ object AudioPlay {
         Coroutine.async {
             durChapter?.let {
                 it.end = audioSize
-                appDb.bookChapterDao.upDate(it)
+                appDb.bookChapterDao.update(it)
             }
         }
     }

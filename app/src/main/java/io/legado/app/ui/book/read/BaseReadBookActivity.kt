@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowInsets
@@ -32,9 +33,21 @@ import io.legado.app.model.ReadBook
 import io.legado.app.ui.book.read.config.BgTextConfigDialog
 import io.legado.app.ui.book.read.config.ClickActionConfigDialog
 import io.legado.app.ui.book.read.config.PaddingConfigDialog
-import io.legado.app.ui.document.HandleFileContract
-import io.legado.app.utils.*
+import io.legado.app.ui.book.read.config.PageKeyDialog
+import io.legado.app.ui.file.HandleFileContract
+import io.legado.app.utils.ColorUtils
+import io.legado.app.utils.FileDoc
+import io.legado.app.utils.find
+import io.legado.app.utils.getPrefString
+import io.legado.app.utils.gone
+import io.legado.app.utils.isTv
+import io.legado.app.utils.navigationBarGravity
+import io.legado.app.utils.navigationBarHeight
+import io.legado.app.utils.setLightStatusBar
+import io.legado.app.utils.setNavigationBarColorAuto
+import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import io.legado.app.utils.visible
 
 /**
  * 阅读界面
@@ -45,10 +58,20 @@ abstract class BaseReadBookActivity :
     override val binding by viewBinding(ActivityBookReadBinding::inflate)
     override val viewModel by viewModels<ReadBookViewModel>()
     var bottomDialog = 0
-    private val selectBookFolderResult = registerForActivityResult(HandleFileContract()){
-        it.uri?.let {
+        set(value) {
+            if (field != value) {
+                field = value
+                onBottomDialogChange()
+            }
+        }
+    private val selectBookFolderResult = registerForActivityResult(HandleFileContract()) {
+        it.uri?.let { uri ->
             ReadBook.book?.let { book ->
-                viewModel.loadChapterList(book)
+                FileDoc.fromUri(uri, true).find(book.originName)?.let { doc ->
+                    book.bookUrl = doc.uri.toString()
+                    book.save()
+                    viewModel.loadChapterList(book)
+                } ?: ReadBook.upMsg("找不到文件")
             }
         } ?: ReadBook.upMsg("没有权限访问")
     }
@@ -69,8 +92,27 @@ abstract class BaseReadBookActivity :
             }
         }
         if (!LocalConfig.readHelpVersionIsLast) {
-            showClickRegionalConfig()
+            if (isTv) {
+                showCustomPageKeyConfig()
+            } else {
+                showClickRegionalConfig()
+            }
         }
+    }
+
+    private fun onBottomDialogChange() {
+        when (bottomDialog) {
+            0 -> onMenuHide()
+            1 -> onMenuShow()
+        }
+    }
+
+    open fun onMenuShow() {
+
+    }
+
+    open fun onMenuHide() {
+
     }
 
     fun showPaddingConfig() {
@@ -85,6 +127,10 @@ abstract class BaseReadBookActivity :
         showDialogFragment<ClickActionConfigDialog>()
     }
 
+    private fun showCustomPageKeyConfig() {
+        PageKeyDialog(this).show()
+    }
+
     /**
      * 屏幕方向
      */
@@ -95,6 +141,7 @@ abstract class BaseReadBookActivity :
             "1" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             "2" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             "3" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            "4" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
         }
     }
 
@@ -103,7 +150,8 @@ abstract class BaseReadBookActivity :
      */
     fun upSystemUiVisibility(
         isInMultiWindow: Boolean,
-        toolBarHide: Boolean = true
+        toolBarHide: Boolean = true,
+        useBgMeanColor: Boolean = false
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.insetsController?.run {
@@ -123,7 +171,15 @@ abstract class BaseReadBookActivity :
         if (toolBarHide) {
             setLightStatusBar(ReadBookConfig.durConfig.curStatusIconDark())
         } else {
-            val statusBarColor = ThemeStore.statusBarColor(this, AppConfig.isTransparentStatusBar)
+            val statusBarColor =
+                if (AppConfig.readBarStyleFollowPage
+                    && ReadBookConfig.durConfig.curBgType() == 0
+                    || useBgMeanColor
+                ) {
+                    ReadBookConfig.bgMeanColor
+                } else {
+                    ThemeStore.statusBarColor(this, AppConfig.isTransparentStatusBar)
+                }
             setLightStatusBar(ColorUtils.isColorLight(statusBarColor))
         }
     }
@@ -174,12 +230,14 @@ abstract class BaseReadBookActivity :
                             width = MATCH_PARENT
                             gravity = Gravity.BOTTOM
                         }
+
                     Gravity.LEFT -> layoutParams =
                         (layoutParams as FrameLayout.LayoutParams).apply {
                             height = MATCH_PARENT
                             width = navigationBarHeight
                             gravity = Gravity.LEFT
                         }
+
                     Gravity.RIGHT -> layoutParams =
                         (layoutParams as FrameLayout.LayoutParams).apply {
                             height = MATCH_PARENT
@@ -198,6 +256,9 @@ abstract class BaseReadBookActivity :
      * 保持亮屏
      */
     fun keepScreenOn(on: Boolean) {
+        val isScreenOn =
+            (window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0
+        if (on == isScreenOn) return
         if (on) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -229,8 +290,12 @@ abstract class BaseReadBookActivity :
                 customView { alertBinding.root }
                 yesButton {
                     alertBinding.run {
-                        val start = editStart.text?.toString()?.toInt() ?: 0
-                        val end = editEnd.text?.toString()?.toInt() ?: book.totalChapterNum
+                        val start = editStart.text!!.toString().let {
+                            if (it.isEmpty()) 0 else it.toInt()
+                        }
+                        val end = editEnd.text!!.toString().let {
+                            if (it.isEmpty()) book.totalChapterNum else it.toInt()
+                        }
                         CacheBook.start(this@BaseReadBookActivity, book, start - 1, end - 1)
                     }
                 }
@@ -271,11 +336,17 @@ abstract class BaseReadBookActivity :
     }
 
     fun isPrevKey(keyCode: Int): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+            return false
+        }
         val prevKeysStr = getPrefString(PreferKey.prevKeys)
         return prevKeysStr?.split(",")?.contains(keyCode.toString()) ?: false
     }
 
     fun isNextKey(keyCode: Int): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+            return false
+        }
         val nextKeysStr = getPrefString(PreferKey.nextKeys)
         return nextKeysStr?.split(",")?.contains(keyCode.toString()) ?: false
     }

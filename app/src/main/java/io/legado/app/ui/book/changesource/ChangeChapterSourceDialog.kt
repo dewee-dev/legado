@@ -1,38 +1,51 @@
 package io.legado.app.ui.book.changesource
 
-import android.content.DialogInterface
 import android.os.Bundle
-import android.view.*
-import android.view.KeyEvent.ACTION_UP
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.view.ViewGroup
+import androidx.activity.addCallback
 import androidx.appcompat.widget.SearchView
 import androidx.appcompat.widget.Toolbar
 import androidx.core.os.bundleOf
 import androidx.core.view.isVisible
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.Lifecycle.State.STARTED
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import io.legado.app.R
 import io.legado.app.base.BaseDialogFragment
-import io.legado.app.constant.AppPattern
 import io.legado.app.constant.EventBus
-import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.databinding.DialogChapterChangeSourceBinding
-import io.legado.app.help.BookHelp
+import io.legado.app.help.book.BookHelp
 import io.legado.app.help.config.AppConfig
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.elevation
 import io.legado.app.lib.theme.primaryColor
+import io.legado.app.ui.book.read.ReadBookActivity
 import io.legado.app.ui.book.source.edit.BookSourceEditActivity
 import io.legado.app.ui.book.source.manage.BookSourceActivity
 import io.legado.app.ui.widget.recycler.VerticalDivider
-import io.legado.app.utils.*
+import io.legado.app.utils.StartActivityContract
+import io.legado.app.utils.applyTint
+import io.legado.app.utils.cnCompare
+import io.legado.app.utils.dpToPx
+import io.legado.app.utils.gone
+import io.legado.app.utils.observeEvent
+import io.legado.app.utils.setLayout
+import io.legado.app.utils.startActivity
+import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.viewbindingdelegate.viewBinding
+import io.legado.app.utils.visible
+import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
@@ -40,7 +53,6 @@ import kotlinx.coroutines.launch
 
 class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_change_source),
     Toolbar.OnMenuItemClickListener,
-    DialogInterface.OnKeyListener,
     ChangeChapterSourceAdapter.CallBack,
     ChangeChapterTocAdapter.Callback {
 
@@ -67,29 +79,23 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
     private val tocAdapter by lazy {
         ChangeChapterTocAdapter(requireContext(), this)
     }
-    private val tocSuccess: (toc: List<BookChapter>) -> Unit = {
-        tocAdapter.durChapterIndex =
-            BookHelp.getDurChapter(viewModel.chapterIndex, viewModel.chapterTitle, it)
-        binding.loadingToc.hide()
-        tocAdapter.setItems(it)
-        binding.recyclerViewToc.scrollToPosition(tocAdapter.durChapterIndex - 5)
-    }
     private val contentSuccess: (content: String) -> Unit = {
-        binding.loadingToc.hide()
+        binding.loadingToc.gone()
         callBack?.replaceContent(it)
         dismissAllowingStateLoss()
     }
     private var searchBook: SearchBook? = null
     private val searchFinishCallback: (isEmpty: Boolean) -> Unit = {
         if (it) {
-            val searchGroup = getPrefString("searchGroup")
-            if (!searchGroup.isNullOrEmpty()) {
-                launch {
-                    alert("搜索结果为空") {
+            val searchGroup = AppConfig.searchGroup
+            if (searchGroup.isNotEmpty()) {
+                lifecycleScope.launch {
+                    context?.alert("搜索结果为空") {
                         setMessage("${searchGroup}分组搜索结果为空,是否切换到全部分组")
-                        cancelButton()
-                        okButton {
-                            putPrefString("searchGroup", "")
+                        noButton()
+                        yesButton {
+                            AppConfig.searchGroup = ""
+                            upGroupMenu()
                             viewModel.startSearch()
                         }
                     }
@@ -101,12 +107,11 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
     override fun onStart() {
         super.onStart()
         setLayout(1f, ViewGroup.LayoutParams.MATCH_PARENT)
-        dialog?.setOnKeyListener(this)
     }
 
     override fun onFragmentCreated(view: View, savedInstanceState: Bundle?) {
         binding.toolBar.setBackgroundColor(primaryColor)
-        viewModel.initData(arguments)
+        viewModel.initData(arguments, callBack?.oldBook, activity is ReadBookActivity)
         showTitle()
         initMenu()
         initView()
@@ -115,6 +120,18 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
         initBottomBar()
         initLiveData()
         viewModel.searchFinishCallback = searchFinishCallback
+        activity?.onBackPressedDispatcher?.addCallback(this) {
+            if (binding.clToc.isVisible) {
+                binding.clToc.gone()
+                return@addCallback
+            }
+            dismissAllowingStateLoss()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        viewModel.searchFinishCallback = null
     }
 
     private fun showTitle() {
@@ -131,6 +148,8 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
             ?.isChecked = AppConfig.changeSourceLoadInfo
         binding.toolBar.menu.findItem(R.id.menu_load_toc)
             ?.isChecked = AppConfig.changeSourceLoadToc
+        binding.toolBar.menu.findItem(R.id.menu_load_word_count)
+            ?.isChecked = AppConfig.changeSourceLoadWordCount
     }
 
     private fun initView() {
@@ -211,18 +230,18 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
             }
             binding.toolBar.menu.applyTint(requireContext())
         }
-        lifecycleScope.launchWhenStarted {
-            viewModel.searchDataFlow.conflate().collect {
-                searchBookAdapter.setItems(it)
-                delay(1000)
+        lifecycleScope.launch {
+            repeatOnLifecycle(STARTED) {
+                viewModel.searchDataFlow.conflate().collect {
+                    searchBookAdapter.setItems(it)
+                    delay(1000)
+                }
             }
         }
-        launch {
-            appDb.bookSourceDao.flowGroupEnabled().conflate().collect {
+        lifecycleScope.launch {
+            appDb.bookSourceDao.flowEnabledGroups().conflate().collect {
                 groups.clear()
-                it.map { group ->
-                    groups.addAll(group.splitNotBlank(AppPattern.splitGroupRegex))
-                }
+                groups.addAll(it)
                 upGroupMenu()
             }
         }
@@ -238,26 +257,37 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
                 item.isChecked = !item.isChecked
                 viewModel.refresh()
             }
-            R.id.menu_load_toc -> {
-                putPrefBoolean(PreferKey.changeSourceLoadToc, !item.isChecked)
-                item.isChecked = !item.isChecked
-            }
+
             R.id.menu_load_info -> {
-                putPrefBoolean(PreferKey.changeSourceLoadInfo, !item.isChecked)
+                AppConfig.changeSourceLoadInfo = !item.isChecked
                 item.isChecked = !item.isChecked
             }
+
+            R.id.menu_load_toc -> {
+                AppConfig.changeSourceLoadToc = !item.isChecked
+                item.isChecked = !item.isChecked
+            }
+
+            R.id.menu_load_word_count -> {
+                AppConfig.changeSourceLoadWordCount = !item.isChecked
+                item.isChecked = !item.isChecked
+                viewModel.onLoadWordCountChecked(item.isChecked)
+            }
+
             R.id.menu_start_stop -> viewModel.startOrStopSearch()
             R.id.menu_source_manage -> startActivity<BookSourceActivity>()
-            else -> if (item?.groupId == R.id.source_group) {
-                if (!item.isChecked) {
-                    item.isChecked = true
-                    if (item.title.toString() == getString(R.string.all_source)) {
-                        putPrefString("searchGroup", "")
-                    } else {
-                        putPrefString("searchGroup", item.title.toString())
+            else -> if (item?.groupId == R.id.source_group && !item.isChecked) {
+                item.isChecked = true
+                if (item.title.toString() == getString(R.string.all_source)) {
+                    AppConfig.searchGroup = ""
+                } else {
+                    AppConfig.searchGroup = item.title.toString()
+                }
+                lifecycleScope.launch(IO) {
+                    viewModel.stopSearch()
+                    if (viewModel.refresh()) {
+                        viewModel.startSearch()
                     }
-                    viewModel.startOrStopSearch()
-                    viewModel.refresh()
                 }
             }
         }
@@ -266,7 +296,7 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
 
     private fun scrollToDurSource() {
         searchBookAdapter.getItems().forEachIndexed { index, searchBook ->
-            if (searchBook.bookUrl == bookUrl) {
+            if (searchBook.bookUrl == oldBookUrl) {
                 (binding.recyclerView.layoutManager as LinearLayoutManager)
                     .scrollToPositionWithOffset(index, 60.dpToPx())
                 return
@@ -278,14 +308,21 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
         this.searchBook = searchBook
         tocAdapter.setItems(null)
         binding.clToc.visible()
-        binding.loadingToc.show()
-        viewModel.getToc(searchBook, tocSuccess) {
+        binding.loadingToc.visible()
+        val book = searchBook.toBook()
+        viewModel.getToc(book, {
             binding.clToc.gone()
             toastOnUi(it)
+        }) { toc: List<BookChapter>, _: BookSource ->
+            tocAdapter.durChapterIndex =
+                BookHelp.getDurChapter(viewModel.chapterIndex, viewModel.chapterTitle, toc)
+            binding.loadingToc.gone()
+            tocAdapter.setItems(toc)
+            binding.recyclerViewToc.scrollToPosition(tocAdapter.durChapterIndex - 5)
         }
     }
 
-    override val bookUrl: String?
+    override val oldBookUrl: String?
         get() = callBack?.oldBook?.bookUrl
 
     override fun topSource(searchBook: SearchBook) {
@@ -308,34 +345,29 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
 
     override fun deleteSource(searchBook: SearchBook) {
         viewModel.del(searchBook)
-        if (bookUrl == searchBook.bookUrl) {
-            viewModel.firstSourceOrNull(searchBook)?.let {
-                changeSource(it)
+        if (oldBookUrl == searchBook.bookUrl) {
+            viewModel.autoChangeSource(callBack?.oldBook?.type) { book, toc, source ->
+                callBack?.changeTo(source, book, toc)
             }
         }
+    }
+
+    override fun setBookScore(searchBook: SearchBook, score: Int) {
+        viewModel.setBookScore(searchBook, score)
+    }
+
+    override fun getBookScore(searchBook: SearchBook): Int {
+        return viewModel.getBookScore(searchBook)
     }
 
     override fun clickChapter(bookChapter: BookChapter, nextChapterUrl: String?) {
         searchBook?.let {
-            binding.loadingToc.show()
+            binding.loadingToc.visible()
             viewModel.getContent(it.toBook(), bookChapter, nextChapterUrl, contentSuccess) { msg ->
-                binding.loadingToc.hide()
+                binding.loadingToc.gone()
                 binding.clToc.gone()
                 toastOnUi(msg)
             }
-        }
-    }
-
-    private fun changeSource(searchBook: SearchBook) {
-        try {
-            val book = searchBook.toBook()
-            book.upInfoFromOld(callBack?.oldBook)
-            val source = appDb.bookSourceDao.getBookSource(book.origin)
-            callBack?.changeTo(source!!, book)
-            searchBook.time = System.currentTimeMillis()
-            viewModel.updateSource(searchBook)
-        } catch (e: Exception) {
-            toastOnUi("换源失败\n${e.localizedMessage}")
         }
     }
 
@@ -343,24 +375,25 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
      * 更新分组菜单
      */
     private fun upGroupMenu() {
-        val menu: Menu = binding.toolBar.menu
-        val selectedGroup = getPrefString("searchGroup")
-        menu.removeGroup(R.id.source_group)
-        val allItem = menu.add(R.id.source_group, Menu.NONE, Menu.NONE, R.string.all_source)
-        var hasSelectedGroup = false
-        groups.sortedWith { o1, o2 ->
-            o1.cnCompare(o2)
-        }.forEach { group ->
-            menu.add(R.id.source_group, Menu.NONE, Menu.NONE, group)?.let {
-                if (group == selectedGroup) {
-                    it.isChecked = true
-                    hasSelectedGroup = true
+        binding.toolBar.menu.findItem(R.id.menu_group)?.subMenu?.let { menu ->
+            val selectedGroup = AppConfig.searchGroup
+            menu.removeGroup(R.id.source_group)
+            val allItem = menu.add(R.id.source_group, Menu.NONE, Menu.NONE, R.string.all_source)
+            var hasSelectedGroup = false
+            groups.sortedWith { o1, o2 ->
+                o1.cnCompare(o2)
+            }.forEach { group ->
+                menu.add(R.id.source_group, Menu.NONE, Menu.NONE, group)?.let {
+                    if (group == selectedGroup) {
+                        it.isChecked = true
+                        hasSelectedGroup = true
+                    }
                 }
             }
-        }
-        menu.setGroupCheckable(R.id.source_group, true, true)
-        if (!hasSelectedGroup) {
-            allItem.isChecked = true
+            menu.setGroupCheckable(R.id.source_group, true, true)
+            if (!hasSelectedGroup) {
+                allItem.isChecked = true
+            }
         }
     }
 
@@ -369,26 +402,14 @@ class ChangeChapterSourceDialog() : BaseDialogFragment(R.layout.dialog_chapter_c
             searchBookAdapter.notifyItemRangeChanged(
                 0,
                 searchBookAdapter.itemCount,
-                bundleOf(Pair("upCurSource", bookUrl))
+                bundleOf(Pair("upCurSource", oldBookUrl))
             )
         }
     }
 
-    override fun onKey(dialog: DialogInterface?, keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_BACK -> event?.let {
-                if (it.action == ACTION_UP && binding.clToc.isVisible) {
-                    binding.clToc.gone()
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
     interface CallBack {
         val oldBook: Book?
-        fun changeTo(source: BookSource, book: Book)
+        fun changeTo(source: BookSource, book: Book, toc: List<BookChapter>)
         fun replaceContent(content: String)
     }
 

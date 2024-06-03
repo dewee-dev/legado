@@ -2,130 +2,90 @@ package io.legado.app.ui.book.audio
 
 import android.app.Application
 import android.content.Intent
+import androidx.lifecycle.viewModelScope
 import io.legado.app.R
 import io.legado.app.base.BaseViewModel
+import io.legado.app.constant.BookType
 import io.legado.app.constant.EventBus
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
-import io.legado.app.help.BookHelp
-import io.legado.app.help.ContentProcessor
+import io.legado.app.help.book.getBookSource
+import io.legado.app.help.book.removeType
 import io.legado.app.model.AudioPlay
+import io.legado.app.model.AudioPlay.durChapter
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.postEvent
 import io.legado.app.utils.toastOnUi
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Dispatchers.IO
 
 class AudioPlayViewModel(application: Application) : BaseViewModel(application) {
 
     fun initData(intent: Intent) = AudioPlay.apply {
         execute {
-            val bookUrl = intent.getStringExtra("bookUrl")
-            if (bookUrl != null && bookUrl != book?.bookUrl) {
-                stop(context)
-                inBookshelf = intent.getBooleanExtra("inBookshelf", true)
-                book = appDb.bookDao.getBook(bookUrl)
-                book?.let { book ->
-                    titleData.postValue(book.name)
-                    coverData.postValue(book.getDisplayCover())
-                    durChapter = appDb.bookChapterDao.getChapter(book.bookUrl, book.durChapterIndex)
-                    upDurChapter(book)
-                    bookSource = appDb.bookSourceDao.getBookSource(book.origin)
-                    if (durChapter == null) {
-                        if (book.tocUrl.isEmpty()) {
-                            loadBookInfo(book)
-                        } else {
-                            loadChapterList(book)
-                        }
-                    }
-                    saveRead(book)
-                }
+            val bookUrl = intent.getStringExtra("bookUrl") ?: return@execute
+            val book = appDb.bookDao.getBook(bookUrl) ?: return@execute
+            inBookshelf = intent.getBooleanExtra("inBookshelf", true)
+            initBook(book)
+        }.onFinally {
+            saveRead()
+        }
+    }
+
+    private fun initBook(book: Book) {
+        val isSameBook = AudioPlay.book?.bookUrl == book.bookUrl
+        if (isSameBook) {
+            AudioPlay.upData(context, book)
+        } else {
+            AudioPlay.resetData(context, book)
+        }
+        if (durChapter == null) {
+            if (book.tocUrl.isEmpty()) {
+                loadBookInfo(book)
+            } else {
+                loadChapterList(book)
             }
         }
     }
 
-    private fun loadBookInfo(
-        book: Book,
-        changeDruChapterIndex: ((chapters: List<BookChapter>) -> Unit)? = null
-    ) {
-        execute {
-            AudioPlay.bookSource?.let {
-                WebBook.getBookInfo(this, it, book)
-                    .onSuccess {
-                        loadChapterList(book, changeDruChapterIndex)
-                    }
-            }
+    private fun loadBookInfo(book: Book) {
+        val bookSource = AudioPlay.bookSource ?: return
+        WebBook.getBookInfo(viewModelScope, bookSource, book).onSuccess(IO) {
+            loadChapterList(book)
         }
     }
 
-    private fun loadChapterList(
-        book: Book,
-        changeDruChapterIndex: ((chapters: List<BookChapter>) -> Unit)? = null
-    ) {
-        execute {
-            AudioPlay.bookSource?.let {
-                WebBook.getChapterList(this, it, book)
-                    .onSuccess(Dispatchers.IO) { cList ->
-                        if (changeDruChapterIndex == null) {
-                            appDb.bookChapterDao.insert(*cList.toTypedArray())
-                        } else {
-                            changeDruChapterIndex(cList)
-                        }
-                        AudioPlay.upDurChapter(book)
-                    }.onError {
-                        context.toastOnUi(R.string.error_load_toc)
-                    }
-            }
+    private fun loadChapterList(book: Book) {
+        val bookSource = AudioPlay.bookSource ?: return
+        WebBook.getChapterList(viewModelScope, bookSource, book).onSuccess(IO) { cList ->
+            book.save()
+            appDb.bookChapterDao.insert(*cList.toTypedArray())
+            AudioPlay.upDurChapter(book)
+        }.onError {
+            context.toastOnUi(R.string.error_load_toc)
         }
     }
 
     fun upSource() {
         execute {
-            AudioPlay.book?.let { book ->
-                AudioPlay.bookSource = appDb.bookSourceDao.getBookSource(book.origin)
-            }
+            val book = AudioPlay.book ?: return@execute
+            AudioPlay.bookSource = book.getBookSource()
         }
     }
 
-    fun changeTo(source: BookSource, book: Book) {
+    fun changeTo(source: BookSource, book: Book, toc: List<BookChapter>) {
         execute {
-            var oldTocSize: Int = book.totalChapterNum
-            AudioPlay.book?.let {
-                oldTocSize = it.totalChapterNum
-                book.order = it.order
-                appDb.bookDao.delete(it)
-            }
+            AudioPlay.book?.migrateTo(book, toc)
+            book.removeType(BookType.updateError)
+            AudioPlay.book?.delete()
             appDb.bookDao.insert(book)
             AudioPlay.book = book
             AudioPlay.bookSource = source
-            if (book.tocUrl.isEmpty()) {
-                loadBookInfo(book) { upChangeDurChapterIndex(book, oldTocSize, it) }
-            } else {
-                loadChapterList(book) { upChangeDurChapterIndex(book, oldTocSize, it) }
-            }
+            appDb.bookChapterDao.insert(*toc.toTypedArray())
+            AudioPlay.upDurChapter(book)
         }.onFinally {
             postEvent(EventBus.SOURCE_CHANGED, book.bookUrl)
-        }
-    }
-
-    private fun upChangeDurChapterIndex(
-        book: Book,
-        oldTocSize: Int,
-        chapters: List<BookChapter>
-    ) {
-        execute {
-            book.durChapterIndex = BookHelp.getDurChapter(
-                book.durChapterIndex,
-                book.durChapterTitle,
-                chapters,
-                oldTocSize
-            )
-            book.durChapterTitle = chapters[book.durChapterIndex].getDisplayTitle(
-                ContentProcessor.get(book.name, book.origin).getTitleReplaceRules()
-            )
-            appDb.bookDao.update(book)
-            appDb.bookChapterDao.insert(*chapters.toTypedArray())
         }
     }
 
