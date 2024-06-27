@@ -16,11 +16,11 @@ jobs:
       run: |
         git config --global user.email "github-actions@github.com"
         git config --global user.name "github-actions"
-    - name: Update fork
-      run: |
-        git remote add upstream https://github.com/dewee-dev/legado.git
-        git remote -v
-        git fetch upstream
-        git checkout master
-        git merge upstream/master
-        git push origin master
+   # - name: Update fork
+      #run: |
+     #   git remote add upstream https://github.com/dewee-dev/legado.git
+       # git remote -v
+      #  git fetch upstream
+      #  git checkout master
+     #   git merge upstream/master
+      #  git push origin master
