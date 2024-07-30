@@ -123,6 +123,7 @@ import io.legado.app.utils.throttle
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.visible
 import kotlinx.coroutines.Dispatchers.IO
+import kotlinx.coroutines.Dispatchers.Main
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -798,7 +799,9 @@ class ReadBookActivity : BaseReadBookActivity(),
     override fun onMenuItemSelected(itemId: Int): Boolean {
         when (itemId) {
             R.id.menu_aloud -> when (AppConfig.contentSelectSpeakMod) {
-                1 -> binding.readView.aloudStartSelect()
+                1 -> lifecycleScope.launch {
+                    binding.readView.aloudStartSelect()
+                }
                 else -> speak(binding.readView.getSelectText())
             }
 
@@ -965,6 +968,19 @@ class ReadBookActivity : BaseReadBookActivity(),
         }
     }
 
+    override suspend fun upContentAwait(
+        relativePosition: Int,
+        resetPageOffset: Boolean,
+        success: (() -> Unit)?
+    ) = withContext(Main.immediate) {
+        binding.readView.cancelSelect()
+        binding.readView.upContent(relativePosition, resetPageOffset)
+        if (relativePosition == 0) {
+            upSeekBarProgress()
+        }
+        loadStates = false
+    }
+
     override fun upPageAnim(upRecorder: Boolean) {
         lifecycleScope.launch {
             binding.readView.upPageAnim(upRecorder)
@@ -984,7 +1000,6 @@ class ReadBookActivity : BaseReadBookActivity(),
     override fun pageChanged() {
         pageChanged = true
         binding.readView.onPageChange()
-        binding.readView.cancelSelect()
         handler.post {
             upSeekBarProgress()
         }
