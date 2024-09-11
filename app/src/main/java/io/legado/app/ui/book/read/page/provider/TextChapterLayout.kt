@@ -446,7 +446,9 @@ class TextChapterLayout(
             val textLine = TextLine(isTitle = isTitle)
             if (durY + textHeight > visibleHeight) {
                 val textPage = pendingTextPage
-                textPage.height = textPage.lines.lastOrNull()?.lineBottom ?: 0f
+                if (textPage.height < durY) {
+                    textPage.height = durY
+                }
                 if (doublePage && absStartX < viewWidth / 2) {
                     //当前页面左列结束
                     textPage.leftLineSize = textPage.lineSize
