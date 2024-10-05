@@ -71,7 +71,10 @@
               <el-button
                 type="primary"
                 size="small"
-                @click="loadFontFromURL"
+                @click="
+                  loadFontFromURL();
+                  customFontSavePopVisible = false;
+                "
                 >网络下载</el-button
               >
             </div>
@@ -189,21 +192,30 @@ import API from "@api";
 const store = useBookStore();
 
 //阅读界面设置改变时保存同步配置
+let configChanged = false;
 watch(
   () => store.config,
   (newValue) => {
     localStorage.setItem("config", JSON.stringify(newValue));
-    API.saveReadConfig(newValue);
+    configChanged = true;
   },
   {
-    deep: 2 //深度为2
-  }
-)
+    deep: 2, //深度为2
+  },
+);
+// 设置页面关闭时同步设置到阅读APP
+watch(
+  () => store.readSettingsVisible,
+  (visbile) => {
+    if (!visbile && configChanged)
+      API.saveReadConfig(store.config).then(() => (configChanged = false));
+  },
+);
 
 //主题颜色
 const theme = computed(() => store.theme);
 const isNight = computed(() => store.isNight);
-const moonIcon = computed(() => theme.value == 6 ? "" : "");
+const moonIcon = computed(() => (theme.value == 6 ? "" : ""));
 const themeColors = [
   {
     background: "rgba(250, 245, 235, 0.8)",
@@ -234,7 +246,7 @@ const popupTheme = computed(() => {
 });
 const setTheme = (theme) => {
   store.config.theme = theme;
-}
+};
 
 //预置字体
 const fonts = ref(["雅黑", "宋体", "楷书"]);
@@ -253,51 +265,45 @@ const setCustomFont = () => {
 };
 // 加载网络字体
 const loadFontFromURL = () => {
-  ElMessageBox.prompt(
-    "请输入 字体网络链接",
-    "提示",
-    {
-      confirmButtonText: "确定",
-      cancelButtonText: "取消",
-      inputPattern: /^https?:.+$/,
-      inputErrorMessage: "url 形式不正确",
-      beforeClose: (action, instance, done) => {
-        if (action === "confirm") {
-          instance.confirmButtonLoading = true;
-          instance.confirmButtonText = "下载中……";
-          // instance.inputValue
-          const url = instance.inputValue
-          if (typeof FontFace !== "function") {
-            ElMessage.error("浏览器不支持FontFace");
-            return done();
-          }
-          const fontface = new FontFace(
-            customFontName.value,
-            `url("${url}")`
-          )
-          //@ts-ignore
-          document.fonts.add(fontface);
-          fontface.load()
-          //API.getBookShelf()
-            .then(function () {
-              instance.confirmButtonLoading = false;
-              ElMessage.info("字体加载成功！");
-              setCustomFont();
-              done();
-            })
-            .catch(function (error) {
-              instance.confirmButtonLoading = false;
-              instance.confirmButtonText = "确定";
-              ElMessage.error("下载失败，请检查您输入的 url");
-              throw error;
-            });
-        } else {
-          done();
+  ElMessageBox.prompt("请输入 字体网络链接", "提示", {
+    confirmButtonText: "确定",
+    cancelButtonText: "取消",
+    inputPattern: /^https?:.+$/,
+    inputErrorMessage: "url 形式不正确",
+    beforeClose: (action, instance, done) => {
+      if (action === "confirm") {
+        instance.confirmButtonLoading = true;
+        instance.confirmButtonText = "下载中……";
+        // instance.inputValue
+        const url = instance.inputValue;
+        if (typeof FontFace !== "function") {
+          ElMessage.error("浏览器不支持FontFace");
+          return done();
         }
-      },
-    }
-  );
-}
+        const fontface = new FontFace(customFontName.value, `url("${url}")`);
+        //@ts-ignore
+        document.fonts.add(fontface);
+        fontface
+          .load()
+          //API.getBookShelf()
+          .then(function () {
+            instance.confirmButtonLoading = false;
+            ElMessage.info("字体加载成功！");
+            setCustomFont();
+            done();
+          })
+          .catch(function (error) {
+            instance.confirmButtonLoading = false;
+            instance.confirmButtonText = "确定";
+            ElMessage.error("下载失败，请检查您输入的 url");
+            throw error;
+          });
+      } else {
+        done();
+      }
+    },
+  });
+};
 
 //字体大小
 const fontSize = computed(() => {
